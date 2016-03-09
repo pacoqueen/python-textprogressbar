@@ -26,13 +26,15 @@ __version__ = '1.2'
 
 class Infinite(object):
     file = stderr
-    sma_window = 10
+    sma_window = 10         # Simple Moving Average window
+    time_threshold = 0.1    # Minimum distance between data points (in seconds)
 
     def __init__(self, *args, **kwargs):
         self.index = 0
         self.start_ts = time()
         self._ts = self.start_ts
-        self._dt = deque(maxlen=self.sma_window)
+        self._xput = deque(maxlen=self.sma_window)
+        self._pending = 0
         for key, val in kwargs.items():
             setattr(self, key, val)
 
@@ -43,7 +45,8 @@ class Infinite(object):
 
     @property
     def avg(self):
-        return sum(self._dt) / len(self._dt) if self._dt else 0
+        """Average throughput"""
+        return sum(self._xput) / len(self._xput) if self._xput else 0
 
     @property
     def elapsed(self):
@@ -65,18 +68,24 @@ class Infinite(object):
     def next(self, n=1):
         if n > 0:
             now = time()
-            dt = (now - self._ts) / n
-            self._dt.append(dt)
-            self._ts = now
+            dt = now - self._ts
+            if dt < self.time_threshold:
+                self._pending += n
+            else:
+                self._xput.append((n + self._pending) / dt)
+                self._ts = now
+                self._pending = 0
 
         self.index = self.index + n
         self.update()
 
     def iter(self, it):
-        for x in it:
-            yield x
-            self.next()
-        self.finish()
+        try:
+            for x in it:
+                yield x
+                self.next()
+        finally:
+            self.finish()
 
 
 class Progress(Infinite):
@@ -86,7 +95,8 @@ class Progress(Infinite):
 
     @property
     def eta(self):
-        return int(ceil(self.avg * self.remaining))
+        avg = self.avg
+        return int(ceil(self.remaining / avg)) if avg else 0
 
     @property
     def eta_td(self):
@@ -117,7 +127,9 @@ class Progress(Infinite):
         except TypeError:
             pass
 
-        for x in it:
-            yield x
-            self.next()
-        self.finish()
+        try:
+            for x in it:
+                yield x
+                self.next()
+        finally:
+            self.finish()
